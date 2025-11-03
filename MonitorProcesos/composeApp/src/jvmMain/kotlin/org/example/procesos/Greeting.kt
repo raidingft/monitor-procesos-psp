@@ -1,4 +1,4 @@
-package org.example.monitor
+package org.example.procesos
 
 class Greeting {
     private val platform = getPlatform()

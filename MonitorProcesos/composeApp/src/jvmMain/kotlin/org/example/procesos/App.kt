@@ -1,4 +1,4 @@
-package org.example.monitor
+package org.example.procesos
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
