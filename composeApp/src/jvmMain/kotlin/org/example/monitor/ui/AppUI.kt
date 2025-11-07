@@ -10,6 +10,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import org.example.monitor.core.AdministradorProcesos
@@ -26,12 +28,15 @@ fun AppUI(manager: AdministradorProcesos) {
     var filtroEstado by remember { mutableStateOf("") }
     var mensaje by remember { mutableStateOf("") }
     var seleccionados by remember { mutableStateOf(setOf<Int>()) }
+    var totalCPU by remember { mutableStateOf(0.0) }
+    var totalMem by remember { mutableStateOf(0.0) }
 
-    // Cargar al inicio
-    LaunchedEffect(Unit) { lista = manager.listProcesses() }
+    LaunchedEffect(Unit) {
+        lista = manager.listProcesses()
+        totalCPU = lista.mapNotNull { it.cpu }.sum()
+        totalMem = manager.getMemoriaTotalPorcentaje() }
 
-    val totalCPU = lista.mapNotNull { it.cpu }.sum()
-    val totalMem = lista.mapNotNull { it.memoria }.sum()
+
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
 
@@ -40,7 +45,6 @@ fun AppUI(manager: AdministradorProcesos) {
 
         Spacer(Modifier.height(16.dp))
 
-        // Resumen CPU y Memoria
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Card(
                 backgroundColor = Color(0xFF1E1E2F),
@@ -73,7 +77,6 @@ fun AppUI(manager: AdministradorProcesos) {
 
         Spacer(Modifier.height(16.dp))
 
-        // Filtros
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = filtroProceso,
@@ -97,32 +100,59 @@ fun AppUI(manager: AdministradorProcesos) {
 
         Spacer(Modifier.height(12.dp))
 
-        // Botones de filtro
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
-                scope.launch { lista = manager.listProcesses() }
-            }) { Text("Refrescar") }
+                mensaje = "Actualizando..."
+                scope.launch {
+                    val nuevaLista = manager.listProcesses()
 
-            Button(onClick = {
-                filtroProceso = ""
-                filtroUsuario = ""
-                filtroEstado = ""
-            }, colors = ButtonDefaults.buttonColors(backgroundColor = Color.Yellow)) {
+                    lista = nuevaLista
+                    totalCPU = nuevaLista.mapNotNull { it.cpu }.sum()
+                    totalMem = manager.getMemoriaTotalPorcentaje()
+
+                    mensaje = "Lista actualizada correctamente."
+                }
+            }) {
+                Text("Refrescar")
+            }
+
+
+            Button(
+                onClick = {
+                    filtroProceso = ""
+                    filtroUsuario = ""
+                    filtroEstado = ""
+                },
+                colors = ButtonDefaults.buttonColors(backgroundColor = Color.Yellow)
+            ) {
                 Text("Limpiar filtros", color = Color.Black)
             }
         }
 
         Spacer(Modifier.height(16.dp))
 
-        // Tabla
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(Color.LightGray)
+                .padding(vertical = 6.dp)
+        ) {
+            HeaderCell("PID", 60.dp)
+            HeaderCell("Nombre", 150.dp)
+            HeaderCell("Usuario", 100.dp)
+            HeaderCell("CPU (%)", 80.dp)
+            HeaderCell("MEM (MB)", 100.dp)
+            HeaderCell("Estado", 90.dp)
+            HeaderCell("Comando", 200.dp)
+        }
+
+        Divider()
+
         val filtrada = lista.filter {
             (filtroProceso.isBlank() || it.nombre.contains(filtroProceso, true)) &&
                     (filtroUsuario.isBlank() || (it.usuario?.contains(filtroUsuario, true) == true)) &&
                     (filtroEstado.isBlank() || (it.estado?.contains(filtroEstado, true) == true))
         }
-
-        Text("Procesos (${filtrada.size})", style = MaterialTheme.typography.subtitle1)
-        Spacer(Modifier.height(8.dp))
 
         LazyColumn(Modifier.weight(1f)) {
             items(filtrada) { proc ->
@@ -133,6 +163,7 @@ fun AppUI(manager: AdministradorProcesos) {
                     "Zombie" -> Color(0xFFE53935)
                     else -> Color.LightGray
                 }
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -142,16 +173,16 @@ fun AppUI(manager: AdministradorProcesos) {
                                 if (seleccionados.contains(proc.pid)) seleccionados - proc.pid
                                 else seleccionados + proc.pid
                         }
-                        .padding(6.dp),
+                        .padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(proc.pid.toString(), Modifier.width(60.dp))
-                    Text(proc.nombre, Modifier.width(150.dp))
-                    Text(proc.usuario ?: "N/A", Modifier.width(100.dp))
-                    Text("${proc.cpu ?: 0.0}%", Modifier.width(80.dp))
-                    Text("${proc.memoria ?: 0.0}%", Modifier.width(80.dp))
-                    Text(proc.estado ?: "?", color = colorEstado, modifier = Modifier.width(90.dp))
-                    Text(proc.comando ?: "", Modifier.weight(1f))
+                    DataCell(proc.pid.toString(), 60.dp)
+                    DataCell(proc.nombre, 150.dp)
+                    DataCell(proc.usuario ?: "N/A", 100.dp)
+                    DataCell("${proc.cpu ?: 0.0}%", 80.dp)
+                    DataCell("${DecimalFormat("#.##").format(proc.memoria ?: 0.0)} MB", 100.dp)
+                    DataCell(proc.estado ?: "?", 90.dp, color = colorEstado)
+                    DataCell(proc.comando ?: "", 200.dp)
                 }
                 Divider()
             }
@@ -159,18 +190,27 @@ fun AppUI(manager: AdministradorProcesos) {
 
         Spacer(Modifier.height(12.dp))
 
-        // Botones inferiores
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                scope.launch {
-                    seleccionados.forEach {
-                        manager.killProcess(it)
+            var cargando by remember { mutableStateOf(false) }
+
+            Button(
+                onClick = {
+                    cargando = true
+                    mensaje = "Actualizando..."
+                    scope.launch {
+                        val nuevaLista = manager.listProcesses()
+                        lista = nuevaLista
+                        totalCPU = nuevaLista.mapNotNull { it.cpu }.sum()
+                        totalMem = manager.getMemoriaTotalPorcentaje()
+                        mensaje = "Lista actualizada correctamente."
+                        cargando = false
                     }
-                    lista = manager.listProcesses()
-                    mensaje = "Procesos finalizados: ${seleccionados.joinToString()}"
-                    seleccionados = emptySet()
-                }
-            }) { Text("Finalizar") }
+                },
+                enabled = !cargando
+            ) {
+                Text(if (cargando) "Actualizando..." else "Refrescar")
+            }
+
 
             Button(onClick = { mensaje = "Detalles próximamente" }) {
                 Text("Detalles")
@@ -183,10 +223,26 @@ fun AppUI(manager: AdministradorProcesos) {
                     csvFile.appendText("${it.pid},${it.nombre},${it.usuario},${it.cpu},${it.memoria},${it.estado},${it.comando}\n")
                 }
                 mensaje = "Exportado a ${csvFile.absolutePath}"
-            }) { Text("Exportar CSV") }
+            }) {
+                Text("Exportar CSV")
+            }
         }
 
         Spacer(Modifier.height(8.dp))
         Text(mensaje)
     }
+}
+
+@Composable
+private fun HeaderCell(text: String, width: Dp) {
+    Text(
+        text,
+        modifier = Modifier.width(width).padding(start = 6.dp),
+        fontWeight = FontWeight.Bold
+    )
+}
+
+@Composable
+private fun DataCell(text: String, width: Dp, color: Color = Color.Unspecified) {
+    Text(text, modifier = Modifier.width(width).padding(start = 6.dp), color = color)
 }

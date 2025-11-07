@@ -5,16 +5,18 @@ import kotlinx.coroutines.withContext
 import org.example.monitor.modelo.DataProcesos
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.lang.management.ManagementFactory
+import com.sun.management.OperatingSystemMXBean
 
 class AdministradorProcesos {
 
-    private val so = SODetector.detect()
+    private val os = detectarSO()
 
     suspend fun listProcesses(): List<DataProcesos> = withContext(Dispatchers.IO) {
         try {
-            when (so) {
-                SO.WINDOWS -> listWindows()
-                SO.LINUX, SO.MAC -> listUnix()
+            when (os) {
+                SistemaOperativo.WINDOWS -> listarWindows()
+                SistemaOperativo.LINUX, SistemaOperativo.MAC -> listarUnix()
                 else -> emptyList()
             }
         } catch (e: Exception) {
@@ -33,27 +35,52 @@ class AdministradorProcesos {
         return lines
     }
 
-    private fun listWindows(): List<DataProcesos> {
-        val lines = runCommand("cmd", "/c", "tasklist /v /fo csv")
-        if (lines.isEmpty()) return emptyList()
+    private fun listarWindows(): List<DataProcesos> {
+        val lines = runCommand("cmd", "/c", "tasklist /v /fo csv /nh")
+        val procesos = mutableListOf<DataProcesos>()
 
-        val result = mutableListOf<DataProcesos>()
-        for (i in 1 until lines.size) {
-            val cols = parseCsv(lines[i])
-            if (cols.size < 2) continue
+        for (line in lines) {
+            val cols = parseCsv(line)
+            if (cols.size < 5) continue
 
-            val name = cols.getOrNull(0)?.trim('"') ?: continue
-            val pid = cols.getOrNull(1)?.trim('"')?.toIntOrNull() ?: continue
-            val user = cols.getOrNull(6)?.trim('"')
-            val mem = cols.getOrNull(4)?.replace("[^0-9]".toRegex(), "")?.toDoubleOrNull()
+            val nombre = cols[0].trim('"')
+            val pid = cols[1].trim('"').toIntOrNull() ?: continue
+            val usuario = cols.getOrNull(6)?.trim('"')
 
-            val cpu = null
-            val estado = "Running"
-            val comando = name
+            val memStr = cols.getOrNull(4)
+                ?.trim('"')
+                ?.replace("[^0-9]".toRegex(), "")
+                ?: "0"
 
-            result.add(DataProcesos(pid, name, user, cpu, mem, estado, comando))
+            val memoriaMB = memStr.toDoubleOrNull()?.div(1024) ?: 0.0
+
+            val estadoRaw = cols.getOrNull(5)?.trim('"') ?: "Desconocido"
+            val estado = if (estadoRaw.equals("Unknown", true)) "Desconocido" else estadoRaw
+            val comando = nombre
+
+            procesos.add(DataProcesos(pid, nombre, usuario, 0.0, memoriaMB, estado, comando))
         }
-        return result
+        return procesos
+    }
+
+    private fun listarUnix(): List<DataProcesos> {
+        val lines = runCommand("bash", "-c", "ps -eo pid,user,pcpu,rss,stat,comm --no-headers")
+        val procesos = mutableListOf<DataProcesos>()
+        for (line in lines) {
+            val parts = line.trim().split(Regex("\\s+"), limit = 6)
+            if (parts.size < 6) continue
+
+            val pid = parts[0].toIntOrNull() ?: continue
+            val usuario = parts[1]
+            val cpu = parts[2].toDoubleOrNull() ?: 0.0
+            val rssKB = parts[3].toDoubleOrNull() ?: 0.0
+            val memoriaMB = rssKB / 1024
+            val estado = parts[4]
+            val comando = parts[5]
+
+            procesos.add(DataProcesos(pid, comando, usuario, cpu, memoriaMB, estado, comando))
+        }
+        return procesos
     }
 
     private fun parseCsv(line: String): List<String> {
@@ -74,38 +101,15 @@ class AdministradorProcesos {
         return out
     }
 
-    private fun listUnix(): List<DataProcesos> {
-        val lines = runCommand("bash", "-c", "ps -eo pid,user,pcpu,pmem,stat,comm --no-headers")
-        val result = mutableListOf<DataProcesos>()
-        for (line in lines) {
-            val parts = line.trim().split(Regex("\\s+"), limit = 6)
-            if (parts.size < 6) continue
-            val pid = parts[0].toIntOrNull() ?: continue
-            val user = parts[1]
-            val cpu = parts[2].toDoubleOrNull()
-            val mem = parts[3].toDoubleOrNull()
-            val estado = when {
-                parts[4].startsWith("R") -> "Running"
-                parts[4].startsWith("S") -> "Sleeping"
-                parts[4].startsWith("Z") -> "Zombie"
-                else -> "Other"
-            }
-            val comando = parts[5]
-            result.add(DataProcesos(pid, comando, user, cpu, mem, estado, comando))
-        }
-        return result
-    }
-
-
     suspend fun killProcess(pid: Int): KillResult = withContext(Dispatchers.IO) {
         try {
-            when (so) {
-                SO.WINDOWS -> {
+            when (os) {
+                SistemaOperativo.WINDOWS -> {
                     val process = ProcessBuilder("cmd", "/c", "taskkill /PID $pid /F").start()
                     val exit = process.waitFor()
                     if (exit == 0) KillResult.Success else KillResult.Error("Error al finalizar proceso")
                 }
-                SO.LINUX, SO.MAC -> {
+                SistemaOperativo.LINUX, SistemaOperativo.MAC -> {
                     val process = ProcessBuilder("bash", "-c", "kill -9 $pid").start()
                     val exit = process.waitFor()
                     if (exit == 0) KillResult.Success else KillResult.Error("Error al finalizar proceso")
@@ -120,5 +124,30 @@ class AdministradorProcesos {
     sealed class KillResult {
         object Success : KillResult()
         data class Error(val msg: String) : KillResult()
+    }
+
+    fun getMemoriaTotalPorcentaje(): Double {
+        return try {
+            val osBean = ManagementFactory.getOperatingSystemMXBean() as OperatingSystemMXBean
+            val total = osBean.totalPhysicalMemorySize.toDouble()
+            val libre = osBean.freePhysicalMemorySize.toDouble()
+            ((total - libre) / total) * 100
+        } catch (e: Exception) {
+            0.0
+        }
+    }
+
+    private fun detectarSO(): SistemaOperativo {
+        val osName = System.getProperty("os.name").lowercase()
+        return when {
+            osName.contains("win") -> SistemaOperativo.WINDOWS
+            osName.contains("linux") -> SistemaOperativo.LINUX
+            osName.contains("mac") -> SistemaOperativo.MAC
+            else -> SistemaOperativo.DESCONOCIDO
+        }
+    }
+
+    enum class SistemaOperativo {
+        WINDOWS, LINUX, MAC, DESCONOCIDO
     }
 }
