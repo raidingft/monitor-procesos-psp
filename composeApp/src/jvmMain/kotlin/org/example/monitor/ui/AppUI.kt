@@ -32,9 +32,14 @@ fun AppUI(manager: AdministradorProcesos) {
     var totalMem by remember { mutableStateOf(0.0) }
 
     LaunchedEffect(Unit) {
+        manager.listProcesses()
+        manager.getCpuTotalPorcentaje()
+
+        kotlinx.coroutines.delay(2000)
+
         lista = manager.listProcesses()
-        totalCPU = lista.mapNotNull { it.cpu }.sum()
         totalMem = manager.getMemoriaTotalPorcentaje()
+        totalCPU = manager.getCpuTotalPorcentaje()
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -99,7 +104,6 @@ fun AppUI(manager: AdministradorProcesos) {
 
         Spacer(Modifier.height(12.dp))
 
-        // 🔸 Refrescar y Limpiar filtros (arriba)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             var cargando by remember { mutableStateOf(false) }
 
@@ -110,9 +114,10 @@ fun AppUI(manager: AdministradorProcesos) {
                     scope.launch {
                         val nuevaLista = manager.listProcesses()
                         lista = nuevaLista
-                        totalCPU = nuevaLista.mapNotNull { it.cpu }.sum()
+
+                        totalCPU = manager.getCpuTotalPorcentaje()
                         totalMem = manager.getMemoriaTotalPorcentaje()
-                        mensaje = "Lista actualizada correctamente."
+                        mensaje = "Lista actualizada correctamente. Procesos: ${nuevaLista.size}"
                         cargando = false
                     }
                 },
@@ -183,8 +188,8 @@ fun AppUI(manager: AdministradorProcesos) {
                     DataCell(proc.pid.toString(), 60.dp)
                     DataCell(proc.nombre, 150.dp)
                     DataCell(proc.usuario ?: "N/A", 100.dp)
-                    DataCell("${proc.cpu ?: 0.0}%", 80.dp)
-                    DataCell("${DecimalFormat("#.##").format(proc.memoria ?: 0.0)} MB", 100.dp)
+                    DataCell(DecimalFormat("#.##").format(proc.cpu ?: 0.0) + "%", 80.dp)
+                    DataCell(DecimalFormat("#.##").format(proc.memoria ?: 0.0) + " MB", 100.dp)
                     DataCell(proc.estado ?: "?", 90.dp, color = colorEstado)
                     DataCell(proc.comando ?: "", 200.dp)
                 }
@@ -206,7 +211,7 @@ fun AppUI(manager: AdministradorProcesos) {
                                 manager.killProcess(pid)
                             }
                             lista = manager.listProcesses()
-                            totalCPU = lista.mapNotNull { it.cpu }.sum()
+                            totalCPU = manager.getCpuTotalPorcentaje()
                             totalMem = manager.getMemoriaTotalPorcentaje()
                             mensaje = "Procesos finalizados: ${seleccionados.joinToString()}"
                             seleccionados = emptySet()
@@ -218,7 +223,6 @@ fun AppUI(manager: AdministradorProcesos) {
                 Text("Finalizar", color = Color.White)
             }
 
-            // 📄 Exportar CSV
             Button(onClick = {
                 val csvFile = File("procesos_export.csv")
                 csvFile.writeText("PID,Proceso,Usuario,CPU,MEM,Estado,Comando\n")

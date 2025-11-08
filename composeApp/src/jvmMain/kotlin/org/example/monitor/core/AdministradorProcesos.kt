@@ -12,6 +12,13 @@ class AdministradorProcesos {
 
     private val os = detectarSO()
 
+    private val cpuTimeCache = mutableMapOf<Int, CpuMeasurement>()
+
+    data class CpuMeasurement(
+        val cpuTime: Double,
+        val timestamp: Long
+    )
+
     suspend fun listProcesses(): List<DataProcesos> = withContext(Dispatchers.IO) {
         try {
             when (os) {
@@ -34,52 +41,68 @@ class AdministradorProcesos {
         process.waitFor()
         return lines
     }
-    private fun convertirCpuTimeACpuPorcentaje(cpuTime: String): Double {
-        return try {
-            val partes = cpuTime.split(":").map { it.toDoubleOrNull() ?: 0.0 }
-            val totalSegundos = when (partes.size) {
-                3 -> partes[0] * 3600 + partes[1] * 60 + partes[2]
-                2 -> partes[0] * 60 + partes[1]
-                else -> partes.firstOrNull() ?: 0.0
-            }
-
-            (totalSegundos % 100).coerceAtMost(99.9)
-        } catch (e: Exception) {
-            0.0
-        }
-    }
 
     private fun listarWindows(): List<DataProcesos> {
         val lines = runCommand("cmd", "/c", "tasklist /v /fo csv /nh")
         val procesos = mutableListOf<DataProcesos>()
 
+        val currentTime = System.currentTimeMillis()
+
         for (line in lines) {
             val cols = parseCsv(line)
-            if (cols.size < 5) continue
+            if (cols.size < 8) continue
 
             val nombre = cols[0].trim('"')
             val pid = cols[1].trim('"').toIntOrNull() ?: continue
             val usuario = cols.getOrNull(6)?.trim('"')
-
-            val memStr = cols.getOrNull(4)
-                ?.trim('"')
-                ?.replace("[^0-9]".toRegex(), "")
-                ?: "0"
-
+            val memStr = cols.getOrNull(4)?.replace("[^0-9]".toRegex(), "") ?: "0"
             val memoriaMB = memStr.toDoubleOrNull()?.div(1024) ?: 0.0
-
             val estadoRaw = cols.getOrNull(5)?.trim('"') ?: "Desconocido"
             val estado = if (estadoRaw.equals("Unknown", true)) "Desconocido" else estadoRaw
             val comando = nombre
 
             val cpuTimeStr = cols.getOrNull(7)?.trim('"') ?: "00:00:00"
-            val cpuPercent = convertirCpuTimeACpuPorcentaje(cpuTimeStr)
+            val partes = cpuTimeStr.split(":").map { it.toDoubleOrNull() ?: 0.0 }
+            val segundosCpu = when (partes.size) {
+                3 -> partes[0] * 3600 + partes[1] * 60 + partes[2]
+                2 -> partes[0] * 60 + partes[1]
+                else -> 0.0
+            }
+
+            val cpuPercent = calcularCpuPorcentaje(pid, segundosCpu, currentTime)
 
             procesos.add(DataProcesos(pid, nombre, usuario, cpuPercent, memoriaMB, estado, comando))
         }
+
+        val pidsActuales = procesos.map { it.pid }.toSet()
+        cpuTimeCache.keys.retainAll(pidsActuales)
+
         return procesos
     }
 
+
+    private fun calcularCpuPorcentaje(pid: Int, segundosCpu: Double, currentTime: Long): Double {
+        val previousMeasurement = cpuTimeCache[pid]
+
+        return if (previousMeasurement != null) {
+            val deltaCpuSeconds = segundosCpu - previousMeasurement.cpuTime
+            val deltaRealMs = currentTime - previousMeasurement.timestamp
+            val deltaRealSeconds = deltaRealMs / 1000.0
+
+            if (deltaRealSeconds >= 1.0 && deltaCpuSeconds >= 0) {
+                val cpuPercent = (deltaCpuSeconds / deltaRealSeconds) * 100.0
+
+                cpuTimeCache[pid] = CpuMeasurement(segundosCpu, currentTime)
+
+                cpuPercent.coerceIn(0.0, 100.0)
+            } else {
+                0.0
+            }
+        } else {
+            cpuTimeCache[pid] = CpuMeasurement(segundosCpu, currentTime)
+            0.0
+        }
+    }
 
     private fun listarUnix(): List<DataProcesos> {
         val lines = runCommand("bash", "-c", "ps -eo pid,user,pcpu,rss,stat,comm --no-headers")
@@ -99,6 +122,35 @@ class AdministradorProcesos {
             procesos.add(DataProcesos(pid, comando, usuario, cpu, memoriaMB, estado, comando))
         }
         return procesos
+    }
+
+
+    private fun parseCpuTime(cpuTimeStr: String): Double {
+        return try {
+            val mainPart: String
+            val millisPart: Double
+
+            if (cpuTimeStr.contains('.')) {
+                val parts = cpuTimeStr.split('.')
+                mainPart = parts[0]
+                millisPart = ("0." + parts.getOrNull(1)?.take(3)).toDoubleOrNull() ?: 0.0
+            } else {
+                mainPart = cpuTimeStr
+                millisPart = 0.0
+            }
+
+            val timeParts = mainPart.split(":").map { it.toDoubleOrNull() ?: 0.0 }
+            val totalSeconds = when (timeParts.size) {
+                3 -> timeParts[0] * 3600 + timeParts[1] * 60 + timeParts[2]
+                2 -> timeParts[0] * 60 + timeParts[1]
+                1 -> timeParts[0]
+                else -> 0.0
+            }
+
+            totalSeconds + millisPart
+        } catch (e: Exception) {
+            0.0
+        }
     }
 
     private fun parseCsv(line: String): List<String> {
@@ -150,6 +202,25 @@ class AdministradorProcesos {
             val total = osBean.totalPhysicalMemorySize.toDouble()
             val libre = osBean.freePhysicalMemorySize.toDouble()
             ((total - libre) / total) * 100
+        } catch (e: Exception) {
+            0.0
+        }
+    }
+
+
+    suspend fun getCpuTotalPorcentaje(): Double = withContext(Dispatchers.IO) {
+        try {
+            val osBean = ManagementFactory.getOperatingSystemMXBean() as OperatingSystemMXBean
+
+            var cpuLoad = osBean.cpuLoad
+
+            if (cpuLoad < 0) {
+                kotlinx.coroutines.delay(100)
+                cpuLoad = osBean.cpuLoad
+            }
+
+            val cpuPercent = cpuLoad * 100
+            if (cpuPercent < 0) 0.0 else cpuPercent.coerceIn(0.0, 100.0)
         } catch (e: Exception) {
             0.0
         }
