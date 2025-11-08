@@ -34,6 +34,20 @@ class AdministradorProcesos {
         process.waitFor()
         return lines
     }
+    private fun convertirCpuTimeACpuPorcentaje(cpuTime: String): Double {
+        return try {
+            val partes = cpuTime.split(":").map { it.toDoubleOrNull() ?: 0.0 }
+            val totalSegundos = when (partes.size) {
+                3 -> partes[0] * 3600 + partes[1] * 60 + partes[2]
+                2 -> partes[0] * 60 + partes[1]
+                else -> partes.firstOrNull() ?: 0.0
+            }
+
+            (totalSegundos % 100).coerceAtMost(99.9)
+        } catch (e: Exception) {
+            0.0
+        }
+    }
 
     private fun listarWindows(): List<DataProcesos> {
         val lines = runCommand("cmd", "/c", "tasklist /v /fo csv /nh")
@@ -58,10 +72,14 @@ class AdministradorProcesos {
             val estado = if (estadoRaw.equals("Unknown", true)) "Desconocido" else estadoRaw
             val comando = nombre
 
-            procesos.add(DataProcesos(pid, nombre, usuario, 0.0, memoriaMB, estado, comando))
+            val cpuTimeStr = cols.getOrNull(7)?.trim('"') ?: "00:00:00"
+            val cpuPercent = convertirCpuTimeACpuPorcentaje(cpuTimeStr)
+
+            procesos.add(DataProcesos(pid, nombre, usuario, cpuPercent, memoriaMB, estado, comando))
         }
         return procesos
     }
+
 
     private fun listarUnix(): List<DataProcesos> {
         val lines = runCommand("bash", "-c", "ps -eo pid,user,pcpu,rss,stat,comm --no-headers")

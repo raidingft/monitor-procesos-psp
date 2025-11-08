@@ -34,9 +34,8 @@ fun AppUI(manager: AdministradorProcesos) {
     LaunchedEffect(Unit) {
         lista = manager.listProcesses()
         totalCPU = lista.mapNotNull { it.cpu }.sum()
-        totalMem = manager.getMemoriaTotalPorcentaje() }
-
-
+        totalMem = manager.getMemoriaTotalPorcentaje()
+    }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
 
@@ -100,22 +99,27 @@ fun AppUI(manager: AdministradorProcesos) {
 
         Spacer(Modifier.height(12.dp))
 
+        // 🔸 Refrescar y Limpiar filtros (arriba)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                mensaje = "Actualizando..."
-                scope.launch {
-                    val nuevaLista = manager.listProcesses()
+            var cargando by remember { mutableStateOf(false) }
 
-                    lista = nuevaLista
-                    totalCPU = nuevaLista.mapNotNull { it.cpu }.sum()
-                    totalMem = manager.getMemoriaTotalPorcentaje()
-
-                    mensaje = "Lista actualizada correctamente."
-                }
-            }) {
-                Text("Refrescar")
+            Button(
+                onClick = {
+                    cargando = true
+                    mensaje = "Actualizando..."
+                    scope.launch {
+                        val nuevaLista = manager.listProcesses()
+                        lista = nuevaLista
+                        totalCPU = nuevaLista.mapNotNull { it.cpu }.sum()
+                        totalMem = manager.getMemoriaTotalPorcentaje()
+                        mensaje = "Lista actualizada correctamente."
+                        cargando = false
+                    }
+                },
+                enabled = !cargando
+            ) {
+                Text(if (cargando) "Actualizando..." else "Refrescar")
             }
-
 
             Button(
                 onClick = {
@@ -191,31 +195,30 @@ fun AppUI(manager: AdministradorProcesos) {
         Spacer(Modifier.height(12.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            var cargando by remember { mutableStateOf(false) }
-
             Button(
                 onClick = {
-                    cargando = true
-                    mensaje = "Actualizando..."
-                    scope.launch {
-                        val nuevaLista = manager.listProcesses()
-                        lista = nuevaLista
-                        totalCPU = nuevaLista.mapNotNull { it.cpu }.sum()
-                        totalMem = manager.getMemoriaTotalPorcentaje()
-                        mensaje = "Lista actualizada correctamente."
-                        cargando = false
+                    if (seleccionados.isEmpty()) {
+                        mensaje = "Selecciona al menos un proceso."
+                    } else {
+                        scope.launch {
+                            mensaje = "Finalizando procesos..."
+                            seleccionados.forEach { pid ->
+                                manager.killProcess(pid)
+                            }
+                            lista = manager.listProcesses()
+                            totalCPU = lista.mapNotNull { it.cpu }.sum()
+                            totalMem = manager.getMemoriaTotalPorcentaje()
+                            mensaje = "Procesos finalizados: ${seleccionados.joinToString()}"
+                            seleccionados = emptySet()
+                        }
                     }
                 },
-                enabled = !cargando
+                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFD32F2F))
             ) {
-                Text(if (cargando) "Actualizando..." else "Refrescar")
+                Text("Finalizar", color = Color.White)
             }
 
-
-            Button(onClick = { mensaje = "Detalles próximamente" }) {
-                Text("Detalles")
-            }
-
+            // 📄 Exportar CSV
             Button(onClick = {
                 val csvFile = File("procesos_export.csv")
                 csvFile.writeText("PID,Proceso,Usuario,CPU,MEM,Estado,Comando\n")
