@@ -57,8 +57,7 @@ class AdministradorProcesos {
             val usuario = cols.getOrNull(6)?.trim('"')
             val memStr = cols.getOrNull(4)?.replace("[^0-9]".toRegex(), "") ?: "0"
             val memoriaMB = memStr.toDoubleOrNull()?.div(1024) ?: 0.0
-            val estadoRaw = cols.getOrNull(5)?.trim('"') ?: "Desconocido"
-            val estado = if (estadoRaw.equals("Unknown", true)) "Desconocido" else estadoRaw
+            val estadoRaw = cols.getOrNull(5)?.trim('"') ?: "Unknown"
             val comando = nombre
 
             val cpuTimeStr = cols.getOrNull(7)?.trim('"') ?: "00:00:00"
@@ -71,7 +70,32 @@ class AdministradorProcesos {
 
             val cpuPercent = calcularCpuPorcentaje(pid, segundosCpu, currentTime)
 
-            procesos.add(DataProcesos(pid, nombre, usuario, cpuPercent, memoriaMB, estado, comando))
+            val estadoMejorado = when {
+                estadoRaw.equals("Running", ignoreCase = true) -> "Running"
+
+                estadoRaw.contains("Not Responding", ignoreCase = true) -> "Not Responding"
+
+                estadoRaw.equals("Unknown", ignoreCase = true) -> {
+                    when {
+                        nombre.lowercase() in listOf("system", "system idle process", "registry",
+                            "smss.exe", "csrss.exe", "wininit.exe",
+                            "services.exe", "lsass.exe", "winlogon.exe") ->
+                            "System"
+
+                        nombre.lowercase() in listOf("svchost.exe", "dllhost.exe", "runtimebroker.exe",
+                            "taskhostw.exe", "spoolsv.exe", "dwm.exe") ->
+                            "Service"
+
+                        cpuPercent > 0.5 -> "Active"
+
+                        else -> "Background"
+                    }
+                }
+
+                else -> estadoRaw
+            }
+
+            procesos.add(DataProcesos(pid, nombre, usuario, cpuPercent, memoriaMB, estadoMejorado, comando))
         }
 
         val pidsActuales = procesos.map { it.pid }.toSet()
@@ -91,9 +115,7 @@ class AdministradorProcesos {
 
             if (deltaRealSeconds >= 1.0 && deltaCpuSeconds >= 0) {
                 val cpuPercent = (deltaCpuSeconds / deltaRealSeconds) * 100.0
-
                 cpuTimeCache[pid] = CpuMeasurement(segundosCpu, currentTime)
-
                 cpuPercent.coerceIn(0.0, 100.0)
             } else {
                 0.0
@@ -107,6 +129,7 @@ class AdministradorProcesos {
     private fun listarUnix(): List<DataProcesos> {
         val lines = runCommand("bash", "-c", "ps -eo pid,user,pcpu,rss,stat,comm --no-headers")
         val procesos = mutableListOf<DataProcesos>()
+
         for (line in lines) {
             val parts = line.trim().split(Regex("\\s+"), limit = 6)
             if (parts.size < 6) continue
@@ -116,40 +139,27 @@ class AdministradorProcesos {
             val cpu = parts[2].toDoubleOrNull() ?: 0.0
             val rssKB = parts[3].toDoubleOrNull() ?: 0.0
             val memoriaMB = rssKB / 1024
-            val estado = parts[4]
+            val estadoRaw = parts[4]
             val comando = parts[5]
 
-            procesos.add(DataProcesos(pid, comando, usuario, cpu, memoriaMB, estado, comando))
+            val estadoTraducido = traducirEstadoLinux(estadoRaw)
+
+            procesos.add(DataProcesos(pid, comando, usuario, cpu, memoriaMB, estadoTraducido, comando))
         }
         return procesos
     }
 
+    private fun traducirEstadoLinux(estadoRaw: String): String {
+        val estadoPrincipal = estadoRaw.firstOrNull()?.uppercaseChar() ?: return "Unknown"
 
-    private fun parseCpuTime(cpuTimeStr: String): Double {
-        return try {
-            val mainPart: String
-            val millisPart: Double
-
-            if (cpuTimeStr.contains('.')) {
-                val parts = cpuTimeStr.split('.')
-                mainPart = parts[0]
-                millisPart = ("0." + parts.getOrNull(1)?.take(3)).toDoubleOrNull() ?: 0.0
-            } else {
-                mainPart = cpuTimeStr
-                millisPart = 0.0
-            }
-
-            val timeParts = mainPart.split(":").map { it.toDoubleOrNull() ?: 0.0 }
-            val totalSeconds = when (timeParts.size) {
-                3 -> timeParts[0] * 3600 + timeParts[1] * 60 + timeParts[2]
-                2 -> timeParts[0] * 60 + timeParts[1]
-                1 -> timeParts[0]
-                else -> 0.0
-            }
-
-            totalSeconds + millisPart
-        } catch (e: Exception) {
-            0.0
+        return when (estadoPrincipal) {
+            'R' -> "Running"
+            'S' -> "Sleeping"
+            'D' -> "Disk Sleep"
+            'Z' -> "Zombie"
+            'T' -> "Stopped"
+            'I' -> "Idle"
+            else -> "Unknown"
         }
     }
 
@@ -175,24 +185,60 @@ class AdministradorProcesos {
         try {
             when (os) {
                 SistemaOperativo.WINDOWS -> {
-                    val process = ProcessBuilder("cmd", "/c", "taskkill /PID $pid /F").start()
-                    val exit = process.waitFor()
-                    if (exit == 0) KillResult.Success else KillResult.Error("Error al finalizar proceso")
+                    val process = ProcessBuilder("cmd", "/c", "taskkill /PID $pid /F")
+                        .redirectErrorStream(true)
+                        .start()
+
+                    val output = process.inputStream.bufferedReader().readText()
+                    val exitCode = process.waitFor()
+
+                    when {
+                        exitCode == 0 -> KillResult.Success
+                        output.contains("Access is denied", ignoreCase = true) ||
+                                output.contains("Acceso denegado", ignoreCase = true) -> {
+                            KillResult.PermissionDenied("No tienes permisos para finalizar el proceso $pid. Ejecuta como administrador.")
+                        }
+                        output.contains("not found", ignoreCase = true) ||
+                                output.contains("no se encontró", ignoreCase = true) -> {
+                            KillResult.ProcessNotFound("El proceso $pid no existe o ya fue finalizado.")
+                        }
+                        else -> KillResult.Error("Error al finalizar proceso $pid: $output")
+                    }
                 }
                 SistemaOperativo.LINUX, SistemaOperativo.MAC -> {
-                    val process = ProcessBuilder("bash", "-c", "kill -9 $pid").start()
-                    val exit = process.waitFor()
-                    if (exit == 0) KillResult.Success else KillResult.Error("Error al finalizar proceso")
+                    val process = ProcessBuilder("bash", "-c", "kill -9 $pid 2>&1")
+                        .redirectErrorStream(true)
+                        .start()
+
+                    val output = process.inputStream.bufferedReader().readText()
+                    val exitCode = process.waitFor()
+
+                    when {
+                        exitCode == 0 -> KillResult.Success
+                        output.contains("Operation not permitted", ignoreCase = true) ||
+                                output.contains("Permission denied", ignoreCase = true) -> {
+                            KillResult.PermissionDenied("No tienes permisos para finalizar el proceso $pid. Usa sudo o ejecuta como root.")
+                        }
+                        output.contains("No such process", ignoreCase = true) -> {
+                            KillResult.ProcessNotFound("El proceso $pid no existe o ya fue finalizado.")
+                        }
+                        else -> KillResult.Error("Error al finalizar proceso $pid: $output")
+                    }
                 }
-                else -> KillResult.Error("SO no soportado")
+                else -> KillResult.Error("Sistema operativo no soportado")
             }
+        } catch (e: SecurityException) {
+            KillResult.PermissionDenied("Permisos insuficientes: ${e.message}")
         } catch (e: Exception) {
-            KillResult.Error("Error: ${e.message}")
+            KillResult.Error("Error inesperado: ${e.message}")
         }
     }
 
+
     sealed class KillResult {
         object Success : KillResult()
+        data class PermissionDenied(val msg: String) : KillResult()
+        data class ProcessNotFound(val msg: String) : KillResult()
         data class Error(val msg: String) : KillResult()
     }
 

@@ -13,10 +13,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import org.example.monitor.core.AdministradorProcesos
 import org.example.monitor.modelo.DataProcesos
-import java.io.File
 import java.text.DecimalFormat
 
 @Composable
@@ -25,11 +25,19 @@ fun AppUI(manager: AdministradorProcesos) {
     var lista by remember { mutableStateOf<List<DataProcesos>>(emptyList()) }
     var filtroProceso by remember { mutableStateOf("") }
     var filtroUsuario by remember { mutableStateOf("") }
-    var filtroEstado by remember { mutableStateOf("") }
+    var filtroEstado by remember { mutableStateOf("Todos") }
     var mensaje by remember { mutableStateOf("") }
+    var mensajeColor by remember { mutableStateOf(Color.Black) }
     var seleccionados by remember { mutableStateOf(setOf<Int>()) }
     var totalCPU by remember { mutableStateOf(0.0) }
     var totalMem by remember { mutableStateOf(0.0) }
+    var expandedEstado by remember { mutableStateOf(false) }
+
+    val estadosDisponibles = listOf(
+        "Todos",
+        "Running", "Active", "Service", "System", "Background", "Not Responding",
+        "Sleeping", "Zombie", "Stopped", "Disk Sleep", "Idle"
+    )
 
     LaunchedEffect(Unit) {
         manager.listProcesses()
@@ -44,8 +52,8 @@ fun AppUI(manager: AdministradorProcesos) {
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
 
-        Text("Monitor de Procesos", style = MaterialTheme.typography.h6)
-        Text("Interfaz moderna • selección múltiple • acciones seguras")
+        Text("Monitor de Procesos Sencillo", style = MaterialTheme.typography.h6)
+        Text("Creditos: Saúl Fernández Torres (Programador) | Curso: 2ºDAM | Clase: PSP")
 
         Spacer(Modifier.height(16.dp))
 
@@ -86,20 +94,63 @@ fun AppUI(manager: AdministradorProcesos) {
                 value = filtroProceso,
                 onValueChange = { filtroProceso = it },
                 label = { Text("Proceso") },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                singleLine = true
             )
             OutlinedTextField(
                 value = filtroUsuario,
                 onValueChange = { filtroUsuario = it },
                 label = { Text("Usuario") },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                singleLine = true
             )
-            OutlinedTextField(
-                value = filtroEstado,
-                onValueChange = { filtroEstado = it },
-                label = { Text("Estado") },
-                modifier = Modifier.weight(1f)
-            )
+
+            Box(modifier = Modifier.weight(1f)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { expandedEstado = !expandedEstado }
+                ) {
+                    OutlinedTextField(
+                        value = filtroEstado,
+                        onValueChange = { },
+                        label = { Text("Estado") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { expandedEstado = !expandedEstado },
+                        readOnly = true,
+                        enabled = false,
+                        trailingIcon = {
+                            Text(
+                                if (expandedEstado) "▲" else "▼",
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                        },
+                        singleLine = true,
+                        colors = TextFieldDefaults.outlinedTextFieldColors(
+                            disabledTextColor = MaterialTheme.colors.onSurface,
+                            disabledBorderColor = MaterialTheme.colors.onSurface.copy(alpha = 0.42f),
+                            disabledLabelColor = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
+                            disabledTrailingIconColor = MaterialTheme.colors.onSurface
+                        )
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = expandedEstado,
+                    onDismissRequest = { expandedEstado = false }
+                ) {
+                    estadosDisponibles.forEach { estado ->
+                        DropdownMenuItem(onClick = {
+                            filtroEstado = estado
+                            expandedEstado = false
+                        }) {
+                            Text(estado)
+                        }
+                    }
+                }
+            }
         }
 
         Spacer(Modifier.height(12.dp))
@@ -111,6 +162,7 @@ fun AppUI(manager: AdministradorProcesos) {
                 onClick = {
                     cargando = true
                     mensaje = "Actualizando..."
+                    mensajeColor = Color.Black
                     scope.launch {
                         val nuevaLista = manager.listProcesses()
                         lista = nuevaLista
@@ -118,6 +170,7 @@ fun AppUI(manager: AdministradorProcesos) {
                         totalCPU = manager.getCpuTotalPorcentaje()
                         totalMem = manager.getMemoriaTotalPorcentaje()
                         mensaje = "Lista actualizada correctamente. Procesos: ${nuevaLista.size}"
+                        mensajeColor = Color(0xFF00C853)
                         cargando = false
                     }
                 },
@@ -130,7 +183,7 @@ fun AppUI(manager: AdministradorProcesos) {
                 onClick = {
                     filtroProceso = ""
                     filtroUsuario = ""
-                    filtroEstado = ""
+                    filtroEstado = "Todos"
                 },
                 colors = ButtonDefaults.buttonColors(backgroundColor = Color.Yellow)
             ) {
@@ -152,7 +205,6 @@ fun AppUI(manager: AdministradorProcesos) {
             HeaderCell("CPU (%)", 80.dp)
             HeaderCell("MEM (MB)", 100.dp)
             HeaderCell("Estado", 90.dp)
-            HeaderCell("Comando", 200.dp)
         }
 
         Divider()
@@ -160,7 +212,7 @@ fun AppUI(manager: AdministradorProcesos) {
         val filtrada = lista.filter {
             (filtroProceso.isBlank() || it.nombre.contains(filtroProceso, true)) &&
                     (filtroUsuario.isBlank() || (it.usuario?.contains(filtroUsuario, true) == true)) &&
-                    (filtroEstado.isBlank() || (it.estado?.contains(filtroEstado, true) == true))
+                    (filtroEstado == "Todos" || (it.estado?.equals(filtroEstado, ignoreCase = true) == true))
         }
 
         LazyColumn(Modifier.weight(1f)) {
@@ -168,8 +220,11 @@ fun AppUI(manager: AdministradorProcesos) {
                 val seleccionado = seleccionados.contains(proc.pid)
                 val colorEstado = when (proc.estado) {
                     "Running" -> Color(0xFF00C853)
-                    "Sleeping" -> Color(0xFF42A5F5)
-                    "Zombie" -> Color(0xFFE53935)
+                    "Active" -> Color(0xFF4CAF50)
+                    "Service" -> Color(0xFF42A5F5)
+                    "System" -> Color(0xFF9C27B0)
+                    "Background" -> Color(0xFF757575)
+                    "Not Responding" -> Color(0xFFE53935)
                     else -> Color.LightGray
                 }
 
@@ -191,7 +246,6 @@ fun AppUI(manager: AdministradorProcesos) {
                     DataCell(DecimalFormat("#.##").format(proc.cpu ?: 0.0) + "%", 80.dp)
                     DataCell(DecimalFormat("#.##").format(proc.memoria ?: 0.0) + " MB", 100.dp)
                     DataCell(proc.estado ?: "?", 90.dp, color = colorEstado)
-                    DataCell(proc.comando ?: "", 200.dp)
                 }
                 Divider()
             }
@@ -203,17 +257,56 @@ fun AppUI(manager: AdministradorProcesos) {
             Button(
                 onClick = {
                     if (seleccionados.isEmpty()) {
-                        mensaje = "Selecciona al menos un proceso."
+                        mensaje = "⚠️ Selecciona al menos un proceso."
+                        mensajeColor = Color(0xFFFF9800)
                     } else {
                         scope.launch {
                             mensaje = "Finalizando procesos..."
+                            mensajeColor = Color.Black
+
+                            var exitosos = 0
+                            var fallidos = 0
+                            val errores = mutableListOf<String>()
+
                             seleccionados.forEach { pid ->
-                                manager.killProcess(pid)
+                                when (val resultado = manager.killProcess(pid)) {
+                                    is AdministradorProcesos.KillResult.Success -> {
+                                        exitosos++
+                                    }
+                                    is AdministradorProcesos.KillResult.PermissionDenied -> {
+                                        fallidos++
+                                        errores.add("PID $pid: ${resultado.msg}")
+                                    }
+                                    is AdministradorProcesos.KillResult.ProcessNotFound -> {
+                                        fallidos++
+                                        errores.add("PID $pid: ${resultado.msg}")
+                                    }
+                                    is AdministradorProcesos.KillResult.Error -> {
+                                        fallidos++
+                                        errores.add("PID $pid: ${resultado.msg}")
+                                    }
+                                }
                             }
+
                             lista = manager.listProcesses()
                             totalCPU = manager.getCpuTotalPorcentaje()
                             totalMem = manager.getMemoriaTotalPorcentaje()
-                            mensaje = "Procesos finalizados: ${seleccionados.joinToString()}"
+
+                            mensaje = when {
+                                exitosos > 0 && fallidos == 0 -> {
+                                    mensajeColor = Color(0xFF00C853)
+                                    "✅ $exitosos proceso(s) finalizados correctamente"
+                                }
+                                exitosos == 0 && fallidos > 0 -> {
+                                    mensajeColor = Color(0xFFE53935)
+                                    "❌ Error: ${errores.firstOrNull() ?: "No se pudo finalizar ningún proceso"}"
+                                }
+                                else -> {
+                                    mensajeColor = Color(0xFFFF9800)
+                                    "⚠️ $exitosos finalizados, $fallidos fallidos. ${errores.firstOrNull() ?: ""}"
+                                }
+                            }
+
                             seleccionados = emptySet()
                         }
                     }
@@ -222,21 +315,10 @@ fun AppUI(manager: AdministradorProcesos) {
             ) {
                 Text("Finalizar", color = Color.White)
             }
-
-            Button(onClick = {
-                val csvFile = File("procesos_export.csv")
-                csvFile.writeText("PID,Proceso,Usuario,CPU,MEM,Estado,Comando\n")
-                filtrada.forEach {
-                    csvFile.appendText("${it.pid},${it.nombre},${it.usuario},${it.cpu},${it.memoria},${it.estado},${it.comando}\n")
-                }
-                mensaje = "Exportado a ${csvFile.absolutePath}"
-            }) {
-                Text("Exportar CSV")
-            }
         }
 
         Spacer(Modifier.height(8.dp))
-        Text(mensaje)
+        Text(mensaje, color = mensajeColor, fontWeight = FontWeight.Medium)
     }
 }
 
