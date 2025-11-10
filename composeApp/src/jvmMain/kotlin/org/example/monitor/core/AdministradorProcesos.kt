@@ -14,6 +14,8 @@ class AdministradorProcesos {
 
     private val cpuTimeCache = mutableMapOf<Int, CpuMeasurement>()
 
+    private val tipoProcesoCache = mutableMapOf<Int, String>()
+
     data class CpuMeasurement(
         val cpuTime: Double,
         val timestamp: Long
@@ -70,36 +72,18 @@ class AdministradorProcesos {
 
             val cpuPercent = calcularCpuPorcentaje(pid, segundosCpu, currentTime)
 
-            val estadoMejorado = when {
+            val estadoReal = when {
                 estadoRaw.equals("Running", ignoreCase = true) -> "Running"
-
                 estadoRaw.contains("Not Responding", ignoreCase = true) -> "Not Responding"
-
-                estadoRaw.equals("Unknown", ignoreCase = true) -> {
-                    when {
-                        nombre.lowercase() in listOf("system", "system idle process", "registry",
-                            "smss.exe", "csrss.exe", "wininit.exe",
-                            "services.exe", "lsass.exe", "winlogon.exe") ->
-                            "System"
-
-                        nombre.lowercase() in listOf("svchost.exe", "dllhost.exe", "runtimebroker.exe",
-                            "taskhostw.exe", "spoolsv.exe", "dwm.exe") ->
-                            "Service"
-
-                        cpuPercent > 0.5 -> "Active"
-
-                        else -> "Background"
-                    }
-                }
-
-                else -> estadoRaw
+                else -> "Unknown"
             }
 
-            procesos.add(DataProcesos(pid, nombre, usuario, cpuPercent, memoriaMB, estadoMejorado, comando))
+            procesos.add(DataProcesos(pid, nombre, usuario, cpuPercent, memoriaMB, estadoReal, comando))
         }
 
         val pidsActuales = procesos.map { it.pid }.toSet()
         cpuTimeCache.keys.retainAll(pidsActuales)
+        tipoProcesoCache.keys.retainAll(pidsActuales)
 
         return procesos
     }
@@ -161,6 +145,82 @@ class AdministradorProcesos {
             'I' -> "Idle"
             else -> "Unknown"
         }
+    }
+
+
+    fun detectarTipoProcesoWindows(pid: Int, nombre: String): String {
+        if (tipoProcesoCache.containsKey(pid)) {
+            return tipoProcesoCache[pid]!!
+        }
+
+        val tipo = try {
+            when {
+                pid < 100 || nombre.lowercase() in listOf(
+                    "system", "system idle process", "registry",
+                    "smss.exe", "csrss.exe", "wininit.exe",
+                    "services.exe", "lsass.exe", "winlogon.exe",
+                    "svchost.exe", "wudfhost.exe"
+                ) -> "Sistema"
+
+                else -> {
+                    val output = runCommand("cmd", "/c", "tasklist /svc /FI \"PID eq $pid\" /FO CSV /NH")
+
+                    if (output.isNotEmpty()) {
+                        val line = output.firstOrNull() ?: ""
+                        val cols = parseCsv(line)
+                        val serviceName = cols.getOrNull(1)?.trim('"') ?: "N/A"
+
+                        if (serviceName != "N/A" && serviceName.isNotBlank()) {
+                            "Servicio"
+                        } else {
+                            "Aplicación"
+                        }
+                    } else {
+                        "Aplicación"
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            "Aplicación"
+        }
+
+        tipoProcesoCache[pid] = tipo
+        return tipo
+    }
+
+
+    fun detectarTipoProcesoLinux(pid: Int, usuario: String, comando: String): String {
+        if (tipoProcesoCache.containsKey(pid)) {
+            return tipoProcesoCache[pid]!!
+        }
+
+        val tipo = try {
+            when {
+                pid == 1 -> "Sistema"
+
+                pid < 100 -> "Sistema"
+
+                else -> {
+                    val ppidOutput = runCommand("bash", "-c", "ps -o ppid= -p $pid 2>/dev/null")
+                    val ppid = ppidOutput.firstOrNull()?.trim()?.toIntOrNull() ?: 0
+
+                    when {
+                        ppid == 1 && usuario == "root" -> "Servicio"
+
+                        usuario == "root" && pid < 1000 -> "Sistema"
+
+                        comando.endsWith("d") && usuario == "root" -> "Servicio"
+
+                        else -> "Aplicación"
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            "Aplicación"
+        }
+
+        tipoProcesoCache[pid] = tipo
+        return tipo
     }
 
     private fun parseCsv(line: String): List<String> {
@@ -234,7 +294,6 @@ class AdministradorProcesos {
         }
     }
 
-
     sealed class KillResult {
         object Success : KillResult()
         data class PermissionDenied(val msg: String) : KillResult()
@@ -253,11 +312,9 @@ class AdministradorProcesos {
         }
     }
 
-
     suspend fun getCpuTotalPorcentaje(): Double = withContext(Dispatchers.IO) {
         try {
             val osBean = ManagementFactory.getOperatingSystemMXBean() as OperatingSystemMXBean
-
             var cpuLoad = osBean.cpuLoad
 
             if (cpuLoad < 0) {

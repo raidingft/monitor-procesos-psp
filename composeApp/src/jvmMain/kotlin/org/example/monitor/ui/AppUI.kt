@@ -33,11 +33,36 @@ fun AppUI(manager: AdministradorProcesos) {
     var totalMem by remember { mutableStateOf(0.0) }
     var expandedEstado by remember { mutableStateOf(false) }
 
-    val estadosDisponibles = listOf(
-        "Todos",
-        "Running", "Active", "Service", "System", "Background", "Not Responding",
-        "Sleeping", "Zombie", "Stopped", "Disk Sleep", "Idle"
-    )
+    val osName = System.getProperty("os.name").lowercase()
+    val esWindows = osName.contains("win")
+
+    val estadosDisponibles = remember(osName) {
+        val estadosBase = mutableListOf("Todos")
+
+        when {
+            esWindows -> {
+                // Windows: Solo estados reales que proporciona tasklist
+                estadosBase.addAll(listOf(
+                    "Running",
+                    "Not Responding",
+                    "Unknown"
+                ))
+            }
+            osName.contains("linux") || osName.contains("mac") -> {
+                // Linux/Mac: Estados reales de ps
+                estadosBase.addAll(listOf(
+                    "Running",
+                    "Sleeping",
+                    "Zombie",
+                    "Stopped",
+                    "Disk Sleep",
+                    "Idle"
+                ))
+            }
+        }
+
+        estadosBase
+    }
 
     LaunchedEffect(Unit) {
         manager.listProcesses()
@@ -193,6 +218,7 @@ fun AppUI(manager: AdministradorProcesos) {
 
         Spacer(Modifier.height(16.dp))
 
+        // CABECERA: Siempre con Estado y Tipo
         Row(
             Modifier
                 .fillMaxWidth()
@@ -205,6 +231,7 @@ fun AppUI(manager: AdministradorProcesos) {
             HeaderCell("CPU (%)", 80.dp)
             HeaderCell("MEM (MB)", 100.dp)
             HeaderCell("Estado", 90.dp)
+            HeaderCell("Tipo", 90.dp)
         }
 
         Divider()
@@ -218,13 +245,22 @@ fun AppUI(manager: AdministradorProcesos) {
         LazyColumn(Modifier.weight(1f)) {
             items(filtrada) { proc ->
                 val seleccionado = seleccionados.contains(proc.pid)
+
+                val tipoProceso = if (esWindows) {
+                    manager.detectarTipoProcesoWindows(proc.pid, proc.nombre)
+                } else {
+                    manager.detectarTipoProcesoLinux(proc.pid, proc.usuario ?: "unknown", proc.nombre)
+                }
+
                 val colorEstado = when (proc.estado) {
                     "Running" -> Color(0xFF00C853)
-                    "Active" -> Color(0xFF4CAF50)
-                    "Service" -> Color(0xFF42A5F5)
-                    "System" -> Color(0xFF9C27B0)
-                    "Background" -> Color(0xFF757575)
+                    "Sleeping" -> Color(0xFF42A5F5)
+                    "Zombie" -> Color(0xFFE53935)
+                    "Stopped" -> Color(0xFFFF9800)
+                    "Disk Sleep" -> Color(0xFF9C27B0)
+                    "Idle" -> Color(0xFF9E9E9E)
                     "Not Responding" -> Color(0xFFE53935)
+                    "Unknown" -> Color(0xFF757575)
                     else -> Color.LightGray
                 }
 
@@ -245,7 +281,9 @@ fun AppUI(manager: AdministradorProcesos) {
                     DataCell(proc.usuario ?: "N/A", 100.dp)
                     DataCell(DecimalFormat("#.##").format(proc.cpu ?: 0.0) + "%", 80.dp)
                     DataCell(DecimalFormat("#.##").format(proc.memoria ?: 0.0) + " MB", 100.dp)
+
                     DataCell(proc.estado ?: "?", 90.dp, color = colorEstado)
+                    DataCell(tipoProceso, 90.dp, color = Color(0xFF616161))
                 }
                 Divider()
             }
