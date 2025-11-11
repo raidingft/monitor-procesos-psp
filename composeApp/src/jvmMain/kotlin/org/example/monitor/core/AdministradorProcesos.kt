@@ -163,14 +163,16 @@ class AdministradorProcesos {
                 ) -> "Sistema"
 
                 else -> {
-                    val output = runCommand("cmd", "/c", "tasklist /svc /FI \"PID eq $pid\" /FO CSV /NH")
+                    val output = runCommand("cmd", "/c", "tasklist /svc /FI \"PID eq $pid\" /FO CSV")
 
-                    if (output.isNotEmpty()) {
-                        val line = output.firstOrNull() ?: ""
+                    // Saltar el header y tomar la segunda línea (datos reales)
+                    if (output.size >= 2) {
+                        val line = output[1] // Segunda línea (índice 1)
                         val cols = parseCsv(line)
-                        val serviceName = cols.getOrNull(1)?.trim('"') ?: "N/A"
+                        val serviceName = cols.getOrNull(2)?.trim('"') ?: "N/D"
 
-                        if (serviceName != "N/A" && serviceName.isNotBlank()) {
+                        // Windows usa "N/D" para aplicaciones sin servicios
+                        if (serviceName != "N/D" && serviceName.isNotBlank()) {
                             "Servicio"
                         } else {
                             "Aplicación"
@@ -187,7 +189,6 @@ class AdministradorProcesos {
         tipoProcesoCache[pid] = tipo
         return tipo
     }
-
 
     fun detectarTipoProcesoLinux(pid: Int, usuario: String, comando: String): String {
         if (tipoProcesoCache.containsKey(pid)) {

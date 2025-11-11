@@ -32,53 +32,39 @@ fun AppUI(manager: AdministradorProcesos) {
     var totalCPU by remember { mutableStateOf(0.0) }
     var totalMem by remember { mutableStateOf(0.0) }
     var expandedEstado by remember { mutableStateOf(false) }
+    var cargandoInicial by remember { mutableStateOf(true) }
 
     val osName = System.getProperty("os.name").lowercase()
     val esWindows = osName.contains("win")
 
     val estadosDisponibles = remember(osName) {
         val estadosBase = mutableListOf("Todos")
-
         when {
             esWindows -> {
-                // Windows: Solo estados reales que proporciona tasklist
-                estadosBase.addAll(listOf(
-                    "Running",
-                    "Not Responding",
-                    "Unknown"
-                ))
+                estadosBase.addAll(listOf("Running", "Not Responding", "Unknown"))
             }
             osName.contains("linux") || osName.contains("mac") -> {
-                // Linux/Mac: Estados reales de ps
-                estadosBase.addAll(listOf(
-                    "Running",
-                    "Sleeping",
-                    "Zombie",
-                    "Stopped",
-                    "Disk Sleep",
-                    "Idle"
-                ))
+                estadosBase.addAll(listOf("Running", "Sleeping", "Zombie", "Stopped", "Disk Sleep", "Idle"))
             }
         }
-
         estadosBase
     }
 
     LaunchedEffect(Unit) {
+        cargandoInicial = true
         manager.listProcesses()
         manager.getCpuTotalPorcentaje()
-
         kotlinx.coroutines.delay(2000)
-
         lista = manager.listProcesses()
         totalMem = manager.getMemoriaTotalPorcentaje()
         totalCPU = manager.getCpuTotalPorcentaje()
+        cargandoInicial = false
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
 
         Text("Monitor de Procesos Sencillo", style = MaterialTheme.typography.h6)
-        Text("Creditos: Saúl Fernández Torres (Programador) | Curso: 2ºDAM | Clase: PSP")
+        Text("Créditos: Saúl Fernández Torres (Programador) | Curso: 2ºDAM | Clase: PSP")
 
         Spacer(Modifier.height(16.dp))
 
@@ -91,7 +77,7 @@ fun AppUI(manager: AdministradorProcesos) {
                     Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("⚡ CPU total", color = Color.White)
+                    Text("⚙ CPU total", color = Color.White)
                     Spacer(Modifier.width(8.dp))
                     Text("${DecimalFormat("#.##").format(totalCPU)}%", color = Color(0xFFffd700))
                 }
@@ -191,7 +177,6 @@ fun AppUI(manager: AdministradorProcesos) {
                     scope.launch {
                         val nuevaLista = manager.listProcesses()
                         lista = nuevaLista
-
                         totalCPU = manager.getCpuTotalPorcentaje()
                         totalMem = manager.getMemoriaTotalPorcentaje()
                         mensaje = "Lista actualizada correctamente. Procesos: ${nuevaLista.size}"
@@ -218,7 +203,22 @@ fun AppUI(manager: AdministradorProcesos) {
 
         Spacer(Modifier.height(16.dp))
 
-        // CABECERA: Siempre con Estado y Tipo
+        // 🔹 NUEVO: mostrar número de procesos totales y visibles
+        val filtrada = lista.filter {
+            (filtroProceso.isBlank() || it.nombre.contains(filtroProceso, true)) &&
+                    (filtroUsuario.isBlank() || (it.usuario?.contains(filtroUsuario, true) == true)) &&
+                    (filtroEstado == "Todos" || (it.estado?.equals(filtroEstado, ignoreCase = true) == true))
+        }
+
+        Text(
+            "Procesos mostrados: ${filtrada.size} / ${lista.size}",
+            fontWeight = FontWeight.Medium,
+            color = Color.Gray,
+            modifier = Modifier.align(Alignment.End)
+        )
+
+        Spacer(Modifier.height(6.dp))
+
         Row(
             Modifier
                 .fillMaxWidth()
@@ -236,56 +236,62 @@ fun AppUI(manager: AdministradorProcesos) {
 
         Divider()
 
-        val filtrada = lista.filter {
-            (filtroProceso.isBlank() || it.nombre.contains(filtroProceso, true)) &&
-                    (filtroUsuario.isBlank() || (it.usuario?.contains(filtroUsuario, true) == true)) &&
-                    (filtroEstado == "Todos" || (it.estado?.equals(filtroEstado, ignoreCase = true) == true))
-        }
-
-        LazyColumn(Modifier.weight(1f)) {
-            items(filtrada) { proc ->
-                val seleccionado = seleccionados.contains(proc.pid)
-
-                val tipoProceso = if (esWindows) {
-                    manager.detectarTipoProcesoWindows(proc.pid, proc.nombre)
-                } else {
-                    manager.detectarTipoProcesoLinux(proc.pid, proc.usuario ?: "unknown", proc.nombre)
-                }
-
-                val colorEstado = when (proc.estado) {
-                    "Running" -> Color(0xFF00C853)
-                    "Sleeping" -> Color(0xFF42A5F5)
-                    "Zombie" -> Color(0xFFE53935)
-                    "Stopped" -> Color(0xFFFF9800)
-                    "Disk Sleep" -> Color(0xFF9C27B0)
-                    "Idle" -> Color(0xFF9E9E9E)
-                    "Not Responding" -> Color(0xFFE53935)
-                    "Unknown" -> Color(0xFF757575)
-                    else -> Color.LightGray
-                }
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(if (seleccionado) Color(0x221E88E5) else Color.Transparent)
-                        .clickable {
-                            seleccionados =
-                                if (seleccionados.contains(proc.pid)) seleccionados - proc.pid
-                                else seleccionados + proc.pid
-                        }
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            if (cargandoInicial) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    DataCell(proc.pid.toString(), 60.dp)
-                    DataCell(proc.nombre, 150.dp)
-                    DataCell(proc.usuario ?: "N/A", 100.dp)
-                    DataCell(DecimalFormat("#.##").format(proc.cpu ?: 0.0) + "%", 80.dp)
-                    DataCell(DecimalFormat("#.##").format(proc.memoria ?: 0.0) + " MB", 100.dp)
-
-                    DataCell(proc.estado ?: "?", 90.dp, color = colorEstado)
-                    DataCell(tipoProceso, 90.dp, color = Color(0xFF616161))
+                    CircularProgressIndicator(color = Color(0xFFffd700))
+                    Spacer(Modifier.height(8.dp))
+                    Text("Cargando lista de procesos...", color = Color.Gray, fontSize = 14.sp)
                 }
-                Divider()
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(filtrada) { proc ->
+                        val seleccionado = seleccionados.contains(proc.pid)
+                        val tipoProceso = if (esWindows) {
+                            manager.detectarTipoProcesoWindows(proc.pid, proc.nombre)
+                        } else {
+                            manager.detectarTipoProcesoLinux(proc.pid, proc.usuario ?: "unknown", proc.nombre)
+                        }
+
+                        val colorEstado = when (proc.estado) {
+                            "Running" -> Color(0xFF00C853)
+                            "Sleeping" -> Color(0xFF42A5F5)
+                            "Zombie" -> Color(0xFFE53935)
+                            "Stopped" -> Color(0xFFFF9800)
+                            "Disk Sleep" -> Color(0xFF9C27B0)
+                            "Idle" -> Color(0xFF9E9E9E)
+                            "Not Responding" -> Color(0xFFE53935)
+                            "Unknown" -> Color(0xFF757575)
+                            else -> Color.LightGray
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(if (seleccionado) Color(0x221E88E5) else Color.Transparent)
+                                .clickable {
+                                    seleccionados =
+                                        if (seleccionados.contains(proc.pid)) seleccionados - proc.pid
+                                        else seleccionados + proc.pid
+                                }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            DataCell(proc.pid.toString(), 60.dp)
+                            DataCell(proc.nombre, 150.dp)
+                            DataCell(proc.usuario ?: "N/A", 100.dp)
+                            DataCell(DecimalFormat("#.##").format(proc.cpu ?: 0.0) + "%", 80.dp)
+                            DataCell(DecimalFormat("#.##").format(proc.memoria ?: 0.0) + " MB", 100.dp)
+                            DataCell(proc.estado ?: "?", 90.dp, color = colorEstado)
+                            DataCell(tipoProceso, 90.dp, color = Color(0xFF616161))
+                        }
+                        Divider()
+                    }
+                }
             }
         }
 
@@ -308,9 +314,7 @@ fun AppUI(manager: AdministradorProcesos) {
 
                             seleccionados.forEach { pid ->
                                 when (val resultado = manager.killProcess(pid)) {
-                                    is AdministradorProcesos.KillResult.Success -> {
-                                        exitosos++
-                                    }
+                                    is AdministradorProcesos.KillResult.Success -> exitosos++
                                     is AdministradorProcesos.KillResult.PermissionDenied -> {
                                         fallidos++
                                         errores.add("PID $pid: ${resultado.msg}")
