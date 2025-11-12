@@ -165,13 +165,11 @@ class AdministradorProcesos {
                 else -> {
                     val output = runCommand("cmd", "/c", "tasklist /svc /FI \"PID eq $pid\" /FO CSV")
 
-                    // Saltar el header y tomar la segunda línea (datos reales)
                     if (output.size >= 2) {
-                        val line = output[1] // Segunda línea (índice 1)
+                        val line = output[1]
                         val cols = parseCsv(line)
                         val serviceName = cols.getOrNull(2)?.trim('"') ?: "N/D"
 
-                        // Windows usa "N/D" para aplicaciones sin servicios
                         if (serviceName != "N/D" && serviceName.isNotBlank()) {
                             "Servicio"
                         } else {
@@ -197,9 +195,16 @@ class AdministradorProcesos {
 
         val tipo = try {
             when {
-                pid == 1 -> "Sistema"
-
                 pid < 100 -> "Sistema"
+
+                comando.startsWith("kworker/") ||
+                        comando.startsWith("kthread") ||
+                        comando.startsWith("ksoftirqd") ||
+                        comando.startsWith("migration/") ||
+                        comando.startsWith("watchdog/") ||
+                        comando.startsWith("rcu_") ||
+                        comando.startsWith("pool_") ||
+                        comando.contains("irq/") -> "Sistema"
 
                 else -> {
                     val ppidOutput = runCommand("bash", "-c", "ps -o ppid= -p $pid 2>/dev/null")
@@ -223,6 +228,7 @@ class AdministradorProcesos {
         tipoProcesoCache[pid] = tipo
         return tipo
     }
+
 
     private fun parseCsv(line: String): List<String> {
         val out = mutableListOf<String>()

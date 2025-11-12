@@ -91,7 +91,7 @@ fun AppUI(manager: AdministradorProcesos) {
                     Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("🧠 Memoria", color = Color.White)
+                    Text("💾 Memoria", color = Color.White)
                     Spacer(Modifier.width(8.dp))
                     Text("${DecimalFormat("#.##").format(totalMem)}%", color = Color(0xFFffb347))
                 }
@@ -203,7 +203,6 @@ fun AppUI(manager: AdministradorProcesos) {
 
         Spacer(Modifier.height(16.dp))
 
-        // 🔹 NUEVO: mostrar número de procesos totales y visibles
         val filtrada = lista.filter {
             (filtroProceso.isBlank() || it.nombre.contains(filtroProceso, true)) &&
                     (filtroUsuario.isBlank() || (it.usuario?.contains(filtroUsuario, true) == true)) &&
