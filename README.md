@@ -67,26 +67,25 @@ Framework declarativo para construcción de interfaces reactivas:
 
 ## 🏗️ Arquitectura
 ```
-┌─────────────────────────────────────┐
-│         Interfaz (Compose)          │
-│   - Filtros                         │
-│   - Tabla de procesos               │
-│   - Controles                       │
-└──────────────┬──────────────────────┘
-               │
-┌──────────────▼──────────────────────┐
-│      Lógica de Negocio (Kotlin)     │
-│   - Gestión de estado               │
-│   - Procesamiento de datos          │
-│   - Corrutinas                      │
-└──────────────┬──────────────────────┘
-               │
-┌──────────────▼──────────────────────┐
-│        APIs del Sistema             │
-│   - ProcessBuilder                  │
-│   - ManagementFactory               │
-│   - OperatingSystemMXBean           │
-└─────────────────────────────────────┘
+org.example.monitor/
+│
+├── core/
+│   ├── AdministradorProcesos.kt  → Contiene la lógica principal gestionando
+│   │                                los procesos: Filtrado, listado y
+│   │                                finalización.
+│   │
+│   └── SODetector.kt             → Detecta el sistema operativo donde se
+│                                    ejecuta.
+│
+├── modelo/
+│   └── DataProcesos.kt           → Define la estructura de datos para los
+│                                    procesos.
+│
+├── ui/
+│   └── AppUI.kt                  → La interfaz del sistema y la interacción
+│                                    con el usuario.
+│
+└── main.kt                       → Punto de inicio de la ejecución del programa.
 ```
 
 ---
